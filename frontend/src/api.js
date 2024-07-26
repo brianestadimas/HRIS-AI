@@ -1,4 +1,4 @@
-const API_URL = 'http://192.168.1.10:5000'; // Replace with your Flask backend URL
+const API_URL = 'http://localhost:5000'; // Replace with your Flask backend URL
 
 export async function fetchData(endpoint) {
     const url = `${API_URL}/${endpoint}`;
