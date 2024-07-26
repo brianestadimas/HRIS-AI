@@ -16,7 +16,7 @@ from llama_index.core.indices.struct_store.sql_query import SQLTableRetrieverQue
 app = Flask(__name__)
 CORS(app)
 
-OPENAI_API_KEY = "sk-proj-NZ8AFTmqmU9O18oruN6JT3BlbkFJ7qoug7ZXLhghtBlOI0QG"
+OPENAI_API_KEY = ""
 
 
 # PostgreSQL connection configuration
