@@ -1,14 +1,20 @@
-const API_URL = 'http://localhost:5000'; // Replace with your Flask backend URL
+const API_URL = 'http://163.180.179.165:5002'; // Replace with your Flask backend URL
 
 export async function fetchData(endpoint) {
     const url = `${API_URL}/${endpoint}`;
     
     try {
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            method: 'GET',
+            mode: 'cors',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
         if (!response.ok) {
             throw new Error('Network response was not ok');
         }
-        return await response.json();;
+        return await response.json();
     } catch (error) {
         console.error('Error fetching data:', error);
         throw error;
@@ -21,10 +27,11 @@ export async function postData(endpoint, data) {
     try {
         const response = await fetch(url, {
             method: 'POST',
+            mode: 'cors',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(data),
+            body: JSON.stringify(data)
         });
 
         if (!response.ok) {

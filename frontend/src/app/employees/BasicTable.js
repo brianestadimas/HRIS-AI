@@ -96,6 +96,8 @@ const BasicTable = () => {
                 <ul className="list-star">
                   <li>Add employees</li>
                   <li>Edit data of employees</li>
+                  <li>Change employee group</li>
+                  <li>Terminate employee</li>
                   <li>
                     Calculate and change base salary of employee based on
                     performance

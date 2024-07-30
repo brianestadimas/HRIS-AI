@@ -3,3 +3,4 @@ backend/venv/
 
 # Ignore frontend/node_modules folder
 frontend/node_modules/
+.env
