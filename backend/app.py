@@ -1,31 +1,37 @@
 from flask import Flask, jsonify, request
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
-from sqlalchemy import create_engine
-from openai import OpenAI
 from sqlalchemy import text
 from flask_cors import CORS
+from src.llm import PurpleGPT, remove_alias_from_sql
 import openai
 import os
-from llama_index.llms.openai import OpenAI
-from llama_index.core import SQLDatabase
-from llama_index.core import VectorStoreIndex
-from llama_index.core.objects import ObjectIndex, SQLTableNodeMapping, SQLTableSchema
-from llama_index.core.indices.struct_store.sql_query import SQLTableRetrieverQueryEngine
-from dotenv import load_dotenv
-import requests
 
+# Initialize the Flask app
 app = Flask(__name__)
 CORS(app)
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-LLAMA_URL = os.getenv('LLAMA_URL')
 database_url = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 openai.api_key = OPENAI_API_KEY
 db = SQLAlchemy(app)
+
+# Load the model and tokenizer
+model_name = "defog/llama-3-sqlcoder-8b"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    trust_remote_code=True,
+    torch_dtype=torch.float16,
+    device_map="cuda:0",
+    use_cache=True,
+)
+purplegpt = PurpleGPT(model, tokenizer)
 
 # Employee model
 class Employee(db.Model):
@@ -87,7 +93,6 @@ def get_employees():
         result.append(employee_data)
     return jsonify(result)
 
-    
 
 @app.route('/attendance', methods=['GET'])
 def get_employee_attendance():
@@ -123,31 +128,7 @@ def get_employee_attendance():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def remove_alias_from_sql(sql_query):
-    if 'UPDATE ' in sql_query and ' SET ' in sql_query:
-        parts = sql_query.split(' ')
-        update_index = parts.index('UPDATE')
-        set_index = parts.index('SET')
-        
-        # Extract table name and alias
-        table_with_alias = parts[update_index + 1]
-        table_name, alias = table_with_alias.split()
-        
-        # Reconstruct the SQL without alias
-        sql_query_no_alias = f"UPDATE {table_name} "
-        
-        # Add parts before SET clause
-        for i in range(set_index, len(parts)):
-            sql_query_no_alias += parts[i].replace(f'{alias}.', f'{table_name}.').replace(f' {alias}', '')
-        
-        # Remove redundant table names in SET clause
-        sql_query_no_alias = sql_query_no_alias.replace(f"{table_name}.{table_name}.", f"{table_name}.")
-        
-        return sql_query_no_alias
 
-    return sql_query
-
-# client = OpenAI()
 @app.route('/employee-ai/edit', methods=['POST'])
 def employee_ai():
     ## LLAMA Block
@@ -155,12 +136,10 @@ def employee_ai():
     if not user_input:
         return jsonify({'error': 'Content is required'}), 400
     try:
-        response = requests.get(f'{LLAMA_URL}/generate-sql', params={'question': user_input})
-        if response.status_code != 200:
-            return jsonify({'error': 'Failed to get response from LLAMA_URL'}), 500
+        response = purplegpt.generate_sql(user_input)
         
-        generated_sql = response.json().get('response')
-        is_update = response.json().get('is_update')
+        generated_sql = response["response"]
+        is_update = response["is_update"]
         generated_sql = remove_alias_from_sql(generated_sql)
         print(generated_sql, is_update) # For debugging
         if not generated_sql:
@@ -172,112 +151,8 @@ def employee_ai():
 
     except Exception as e:
         return jsonify({'error': str(e), 'status': 500}), 500
-    
-    ## OPENAI Block
-    # user_input = request.json.get('content')  # Get input from request body
-    # if not user_input:
-    #     return jsonify({'error': 'Content is required'}), 400
-
-    # try:
-    #     completion = client.chat.completions.create(
-    #         model="ft:gpt-3.5-turbo-0125:personal::9luaAwx2",
-    #         messages=[
-    #             {"role": "system", "content": "You are an assistant to output SQL queries for INSERT or UPDATE statements only."},
-    #             {"role": "user", "content": user_input + " no need any constraints"},
-    #         ]
-    #     )
-
-    #     sql_query = completion.choices[0].message.content  # Correct access to message content
-    #     print(sql_query)  # For debugging
-
-    #     # Execute the SQL query
-    #     db.session.execute(text(sql_query))  # Use text() to declare the SQL query
-    #     db.session.commit()
-
-    #     return jsonify({'message': 'Query executed successfully', 'status': 200}), 200
-
-    # except Exception as e:
-    #     return jsonify({'error': str(e), 'status': 500}), 500
 
 
-''' LLAMA INDEX '''
-# Table Context
-tables_context = [
-    {
-        "table_name": "employee",
-        "context": "List of employee in the app, contains first_name, last_name, email, gender, role, company, working_hours (weekly), and progress.",
-    },
-    {
-        "table_name": "absensi_harian",
-        "context": "Records daily attendance information for employees, capturing absence statuses. Contains employee_id, date, month, year, status (mean ontime or tardiness), overtime_hours, work_hours per day.",
-    },
-]
-
-engine = create_engine(database_url)
-# llm = OpenAI(api_key=OPENAI_API_KEY, model="ft:gpt-3.5-turbo-0125:personal:evaluationai:9mDX4VhX")
-llm = OpenAI(api_key=OPENAI_API_KEY, model="gpt-4o")
-
-sql_database = SQLDatabase(
-    engine, include_tables=[table["table_name"] for table in tables_context]
-)
-tables = list(sql_database._all_tables)
-table_node_mapping = SQLTableNodeMapping(sql_database)
-table_schema_objs = []
-for idx, table in enumerate(tables):
-    table_schema_objs.append((SQLTableSchema(table_name = table, context_str = tables_context[idx]["context"])))
-
-tables = list(sql_database._all_tables)
-table_node_mapping = SQLTableNodeMapping(sql_database)
-table_schema_objs = []
-for idx, table in enumerate(tables):
-    table_schema_objs.append((SQLTableSchema(table_name = table, context_str = tables_context[idx]["context"])))
-    
-obj_index = ObjectIndex.from_objects(
-    table_schema_objs,
-    table_node_mapping,
-    VectorStoreIndex
-)
-
-# initializing query engine 
-query_engine = SQLTableRetrieverQueryEngine(
-    sql_database, obj_index.as_retriever(similarity_top_k=3), 
-)
-''' END OF LLAMA INDEX '''
-
-@app.route('/evaluation-ai/', methods=['POST'])
-def evaluation_ai():
-    user_input = request.json.get('content')  # Get input from request body
-    if not user_input:
-        return jsonify({'error': 'Content is required'}), 400
-    try:
-        format = "{employee:[], answer: YOUR_ANSWER_HERE}"
-        template = f"You are an assistant to provide information and evaluations based on the employee and absensi_harian tables. Provide output in format {format}, leave empty if no employee related. \nINPUT: {user_input}"
-        response = query_engine.query(user_input + " jelaskan lebih lanjut (jangan gunakan user id) dan berikan saran")
-
-        # if not isinstance(response, str):
-        #     response = str(response)
-        
-        # # Manually parse the response string
-        # print(response)
-        # response = response.strip('{}')
-        # response_parts = response.split(', answer:')
-        # employee_part = response_parts[0].split(':')[1]
-        # answer_part = response_parts[1]
-
-        # # Construct the dictionary
-        # response_dict = {
-        #     "employee": employee_part,
-        #     "answer": answer_part3
-        # }
-        
-        
-        # print(response_dict)  # For debugging
-        # sql_query = completion.choices[0].message.content  # Correct access to message content
-        return jsonify({'message': str(response), 'status': 200}), 200
-    
-    except Exception as e:
-        return jsonify({'error': str(e), 'status': 500}), 500
-
-
+# Run the Flask app
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True)
+    app.run(host='0.0.0.0', port=5001)
